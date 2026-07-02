@@ -27,6 +27,6 @@ ros2 run unity_franka_bridge planner_node
 Comando launch (lanza todo):
 ```bash
 ros2 launch unity_franka_bridge unity_moveit.launch.py
-```
+```bash
 ros2 launch unity_franka_bridge unity_moveit.launch.py ros_ip:=IP
 ```
