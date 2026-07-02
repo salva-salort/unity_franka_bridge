@@ -8,18 +8,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     
-    # 1. DECLARAR EL ARGUMENTO DE LA TERMINAL (IP personalizable)
-    # Si no pones nada en la terminal, usará '0.0.0.0' por defecto
+    # DECLARAR EL ARGUMENTO DE LA TERMINAL (IP personalizable)
+    # Si no se pone nada en la terminal, usará '0.0.0.0' por defecto
     ros_ip_arg = DeclareLaunchArgument(
         'ros_ip',
         default_value='0.0.0.0',
         description='IP del servidor ROS-TCP'
     )
 
-    # Variable que usaremos para pasarle el valor al nodo
     ros_ip = LaunchConfiguration('ros_ip')
 
-    # 2. EL SERVIDOR TCP (ros_tcp_endpoint)
+    # EL SERVIDOR TCP (ros_tcp_endpoint)
     tcp_endpoint_node = Node(
         package='ros_tcp_endpoint',
         executable='default_server_endpoint',
@@ -28,7 +27,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3. EL CEREBRO DE MOVEIT (franka_fr3_moveit_config)
+    # EL CEREBRO DE MOVEIT (franka_fr3_moveit_config)
     # Primero buscamos dónde está instalado ese paquete en tu sistema
     moveit_launch_dir = get_package_share_directory('franka_fr3_moveit_config')
     
@@ -43,7 +42,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # 4. TU NODO TRADUCTOR (unity_franka_bridge)
+    # NODO TRADUCTOR (unity_franka_bridge)
     planner_node = Node(
         package='unity_franka_bridge',
         executable='planner_node',
@@ -51,7 +50,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 5. EMPAQUETAR Y LANZAR TODO
     return LaunchDescription([
         ros_ip_arg,
         tcp_endpoint_node,
