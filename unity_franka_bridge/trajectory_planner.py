@@ -17,10 +17,13 @@ class UnityMoveItClient(Node):
     def __init__(self):
         super().__init__('unity_moveit_client') 
         
-
         self.latest_unity_joints = None 
         self.last_planned_end_joints = None
         self.is_real_robot = False
+        
+        # Flags para la lógica de comprobación única
+        self.environment_checked = False
+        self.joints_before_move = None
         
         self.joint_state_sub = self.create_subscription(
             JointState,
@@ -60,21 +63,24 @@ class UnityMoveItClient(Node):
                 current_positions.append(msg.position[index])
         
         if len(current_positions) == 7:
-            
-           
-            if self.latest_unity_joints is not None and not self.is_real_robot:
-                for i in range(7):
-                    
-                    if abs(current_positions[i] - self.latest_unity_joints[i]) > 1e-6:
-                        self.is_real_robot = True
-                        self.get_logger().info("¡Modo ROBOT REAL Activo!")
-                        break
-            
-            # Guardamos la posición actual para la siguiente comparación
             self.latest_unity_joints = current_positions
+
+
+            # Si estamos ejecutando la primera orden y aún no sabemos el entorno, vigilamos si el robot se mueve
+            if not self.environment_checked and self.joints_before_move is not None:
+                for i in range(7):
+                    if abs(current_positions[i] - self.joints_before_move[i]) > 0.01:
+                        self.is_real_robot = True
+                        self.environment_checked = True
+                        self.get_logger().info("🤖 [Auto-Detección] Movimiento físico detectado. ¡Modo ROBOT REAL verificado y fijado!")
+                        break
 
     def target_pose_callback(self, msg):
         self.get_logger().info(f"Calculando trayectoria hacia: x={msg.pose.position.x:.2f}, y={msg.pose.position.y:.2f}, z={msg.pose.position.z:.2f}")
+
+        if self.latest_unity_joints is None:
+            self.get_logger().error("❌ ¡ERROR CRÍTICO DE SEGURIDAD! '/joint_states' no disponible. Abortando orden.")
+            return 
 
         req = GetMotionPlan.Request()
         req.motion_plan_request.group_name = 'fr3_arm' 
@@ -88,30 +94,20 @@ class UnityMoveItClient(Node):
         js = JointState()
         js.name = ['fr3_joint1', 'fr3_joint2', 'fr3_joint3', 'fr3_joint4', 'fr3_joint5', 'fr3_joint6', 'fr3_joint7']
         
-
         if self.last_planned_end_joints is not None and not self.is_real_robot:
             js.position = self.last_planned_end_joints
-            self.get_logger().info(" [SIMULACIÓN] Encadenando: Iniciando plan desde el final de la trayectoria anterior.")
-        
-        elif self.latest_unity_joints is not None:
-            # Entra aquí en el primer movimiento de simulación, o SIEMPRE si es el robot real
+            self.get_logger().info(" [🌐SIMULACIÓN] Encadenando: Iniciando plan desde el final de la trayectoria anterior.")
+        else:
             js.position = self.latest_unity_joints
             if self.is_real_robot:
-                self.get_logger().info(" [ROBOT REAL] Planificando desde la posición física actual de los motores.")
+                self.get_logger().info(" [🤖ROBOT REAL] Planificando desde la posición física actual de los motores.")
             else:
-                self.get_logger().info(" [SIMULACIÓN] Primer comando: Iniciando plan desde la posición inicial de ROS.")
-        
-        else:
-            # Caso extremo de seguridad: Utilizamos home manual
-            js.position = [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
-            self.get_logger().warning(" No se ha recibido /joint_states aún. Usando postura 'Home' de emergencia.")
-        # ---------------------------------------------------------------------------------
+                self.get_logger().info(" [🌐SIMULACIÓN] Primer comando: Iniciando plan desde la posición inicial de ROS.")
 
         start_state.joint_state = js
         req.motion_plan_request.start_state = start_state
 
         constraint = Constraints()
-        
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = msg.header.frame_id if msg.header.frame_id else "world"
         pos_constraint.link_name = "fr3_link8" 
@@ -157,7 +153,6 @@ class UnityMoveItClient(Node):
                 
                 self.trajectory_pub.publish(joint_trajectory)
                 self.execute_plan(full_trajectory)
-                
             else:
                 self.get_logger().error(f"❌ MoveIt falló al calcular. Código de error: {response.motion_plan_response.error_code.val}")
         except Exception as e:
@@ -171,8 +166,27 @@ class UnityMoveItClient(Node):
         goal_msg = ExecuteTrajectory.Goal()
         goal_msg.trajectory = robot_trajectory
 
-        self.execute_client.send_goal_async(goal_msg)
+
+        if not self.environment_checked and self.joints_before_move is None and self.latest_unity_joints is not None:
+            self.joints_before_move = list(self.latest_unity_joints)
+
+        send_goal_future = self.execute_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.goal_response_callback)
         self.get_logger().info(" ¡Comando enviado a los motores! El robot se está moviendo.")
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if goal_handle.accepted:
+            goal_handle.get_result_async().add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+
+        # Si la trayectoria ha terminado por completo y las articulaciones NUNCA variaron del origen, 
+        # significa inequívocamente que estamos en el entorno de simulación virtual.
+        if not self.environment_checked:
+            self.is_real_robot = False
+            self.environment_checked = True
+            self.get_logger().info("🌐 [Auto-Detección] Trayectoria completada sin cambios. ¡Modo SIMULACIÓN verificado y fijado!")
 
 def main(args=None):
     rclpy.init(args=args)
